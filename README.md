@@ -17,7 +17,7 @@ S’equivoca i el jugador podria retrocedir en la carrera.
 🔗 L’objectiu principal és fomentar l’aprenentatge matemàtic mitjançant un entorn lúdic i competitiu, fent que les matemàtiques siguin més atractives i accessibles per als estudiants.
 
 📋 Gestor de tasques:
-Trello - TR2JocMates
+https://tree.taiga.io/project/ikerdelgado-tr2_carreramates/backlog
 
 🎨 Prototip gràfic del projecte:
 (Penpot)
