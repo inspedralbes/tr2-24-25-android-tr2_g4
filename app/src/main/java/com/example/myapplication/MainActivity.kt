@@ -1,276 +1,214 @@
 package com.example.myapplication
 
-import android.content.Context
+import android.content.Intent
 import android.os.Bundle
+import android.util.Log
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.unit.dp
 import com.example.myapplication.network.RetrofitClient
-import com.example.myapplication.ui.theme.MyApplicationTheme
+import com.example.myapplication.network.Script
+import com.example.myapplication.network.ScriptStatus
+import com.example.myapplication.network.SocketManager
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.tooling.preview.Preview
+import io.socket.emitter.Emitter
+import org.json.JSONArray
+import org.json.JSONObject
+
 
 class MainActivity : ComponentActivity() {
+    private val socket = SocketManager.getSocket()
+    private val scriptLogs = mutableMapOf<String, MutableList<String>>()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            MyApplicationTheme {
-                LoginRegisterScreen(context = this)
-            }
-        }
+        setContentView(R.layout.activity_main)
+        fetchScripts()
+        setupSocketListeners()
+        socket.connect()
     }
-}
-
-@Composable
-fun LoginRegisterScreen(context: Context) {
-    var isLogin by remember { mutableStateOf(true) }
-
-    if (isLogin) {
-        LoginScreen(context = context, onSwitchToRegister = { isLogin = false })
-    } else {
-        RegisterScreen(context = context, onSwitchToLogin = { isLogin = true })
-    }
-}
-
-@Composable
-fun LoginScreen(context: Context, onSwitchToRegister: () -> Unit) {
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
-    val apiService = RetrofitClient.apiService
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Iniciar Sesión", style = MaterialTheme.typography.headlineMedium)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        TextField(
-            value = email,
-            onValueChange = { email = it },
-            label = { Text("Correo Electrónico") },
-            modifier = Modifier.fillMaxWidth(),
-            isError = email.isNotBlank() && !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches(),
-            keyboardOptions = KeyboardOptions.Default.copy(
-                imeAction = ImeAction.Next
-            ),
-            keyboardActions = KeyboardActions(onNext = { /* handle next action */ })
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        TextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Contraseña") },
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-            isError = password.isBlank(),
-            keyboardOptions = KeyboardOptions.Default.copy(
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(onDone = { /* handle done action */ })
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                if (email.isBlank() || password.isBlank()) {
-                    Toast.makeText(context, "Por favor completa todos los campos", Toast.LENGTH_SHORT).show()
-                } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-                    Toast.makeText(context, "Correo electrónico inválido", Toast.LENGTH_SHORT).show()
+    private fun fetchScripts() {
+        RetrofitClient.apiService.getScripts().enqueue(object : Callback<List<String>> {
+            override fun onResponse(call: Call<List<String>>, response: Response<List<String>>) {
+                if (response.isSuccessful) {
+                    val scriptNames = response.body()
+                    scriptNames?.let {
+                        val scripts = it.map { name -> Script(name) }
+                        displayScripts(scripts)
+                    }
                 } else {
-                    isLoading = true
-                    val credentials = mapOf("email" to email, "password" to password)
-                    apiService.login(credentials).enqueue(object : Callback<Map<String, Any>> {
-                        override fun onResponse(
-                            call: Call<Map<String, Any>>,
-                            response: Response<Map<String, Any>>
-                        ) {
-                            isLoading = false
-                            if (response.isSuccessful) {
-                                val data = response.body()
-                                Toast.makeText(
-                                    context,
-                                    "Bienvenido: ${data?.get("name")}",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            } else {
-                                Toast.makeText(
-                                    context,
-                                    "Error de inicio de sesión",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-
-                        override fun onFailure(call: Call<Map<String, Any>>, t: Throwable) {
-                            isLoading = false
-                            Toast.makeText(
-                                context,
-                                "Error de red",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    })
+                    Log.e("Error", "Error al obtener los scripts")
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isLoading
-        ) {
-            if (isLoading) {
-                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
-            } else {
-                Text("Iniciar Sesión")
             }
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
+            override fun onFailure(call: Call<List<String>>, t: Throwable) {
+                Log.e("Error", "Fallo en la llamada: ${t.message}")
+            }
+        })
+    }
 
-        TextButton(onClick = onSwitchToRegister) {
-            Text("¿No tienes cuenta? Regístrate aquí")
+    private fun displayScripts(scripts: List<Script>) {
+        val scriptsContainer = findViewById<LinearLayout>(R.id.scriptsContainer)
+        scriptsContainer.removeAllViews()
+
+        for (script in scripts) {
+            val scriptLayout = LinearLayout(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, 16, 0, 16)
+            }
+
+            val scriptNameTextView = TextView(this).apply {
+                text = script.name
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            }
+
+            val startStopButton = android.widget.Button(this).apply {
+                text = "Iniciar"
+                setOnClickListener {
+                    val action = if (text == "Iniciar") "start" else "stop"
+                    controlScript(script.name, action)
+                    text = if (action == "start") "Detener" else "Iniciar"
+                }
+            }
+
+            val logsStdoutButton = android.widget.Button(this).apply {
+                text = "Logs Salida"
+                setOnClickListener {
+                    val logs = scriptLogs[script.name]?.filter { it.startsWith("STDOUT") }
+                        ?.joinToString("\n") ?: "Sin logs de salida"
+                    showLogsActivity("Logs de salida - ${script.name}", script.name, logs)
+                }
+            }
+
+            val logsStderrButton = android.widget.Button(this).apply {
+                text = "Logs Error"
+                setOnClickListener {
+                    val logs = scriptLogs[script.name]?.filter { it.startsWith("STDERR") }
+                        ?.joinToString("\n") ?: "Sin logs de error"
+                    showErrorLogsActivity("Logs de error - ${script.name}", script.name, logs)
+                }
+            }
+
+            getScriptStatus(script.name) { status ->
+                startStopButton.text = if (status == "running") "Detener" else "Iniciar"
+            }
+
+            scriptLayout.addView(scriptNameTextView)
+            scriptLayout.addView(startStopButton)
+            scriptLayout.addView(logsStdoutButton)
+            scriptLayout.addView(logsStderrButton)
+
+            scriptsContainer.addView(scriptLayout)
         }
     }
-}
 
-@Composable
-fun RegisterScreen(context: Context, onSwitchToLogin: () -> Unit) {
-    var firstName by remember { mutableStateOf("") }
-    var lastName by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
-    val apiService = RetrofitClient.apiService
+    private fun showErrorLogsActivity(title: String, scriptName: String, logs: String) {
+        val intent = Intent(this, ErrorLogsActivity::class.java)
+        intent.putExtra("logs", logs)
+        intent.putExtra("scriptName", scriptName)
+        startActivity(intent)
+    }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Registro", style = MaterialTheme.typography.headlineMedium)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        TextField(
-            value = firstName,
-            onValueChange = { firstName = it },
-            label = { Text("Nombre") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        TextField(
-            value = lastName,
-            onValueChange = { lastName = it },
-            label = { Text("Apellidos") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        TextField(
-            value = email,
-            onValueChange = { email = it },
-            label = { Text("Correo Electrónico") },
-            modifier = Modifier.fillMaxWidth(),
-            isError = email.isNotBlank() && !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        TextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Contraseña") },
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                if (firstName.isBlank() || lastName.isBlank() || email.isBlank() || password.isBlank()) {
-                    Toast.makeText(context, "Por favor completa todos los campos", Toast.LENGTH_SHORT).show()
-                } else if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-                    Toast.makeText(context, "Correo electrónico inválido", Toast.LENGTH_SHORT).show()
+    private fun controlScript(scriptName: String, action: String) {
+        RetrofitClient.apiService.controlScript(scriptName, action).enqueue(object : Callback<Map<String, String>> {
+            override fun onResponse(call: Call<Map<String, String>>, response: Response<Map<String, String>>) {
+                if (response.isSuccessful) {
+                    val message = response.body()?.get("message") ?: "Acción realizada"
+                    Toast.makeText(this@MainActivity, "$message en $scriptName", Toast.LENGTH_SHORT).show()
                 } else {
-                    isLoading = true
-                    val newUser = mapOf(
-                        "firstName" to firstName,
-                        "lastName" to lastName,
-                        "email" to email,
-                        "password" to password
-                    )
-                    apiService.addUser(newUser).enqueue(object : Callback<Map<String, Any>> {
-                        override fun onResponse(
-                            call: Call<Map<String, Any>>,
-                            response: Response<Map<String, Any>>
-                        ) {
-                            isLoading = false
-                            if (response.isSuccessful) {
-                                Toast.makeText(
-                                    context,
-                                    "Usuario registrado con éxito",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                                onSwitchToLogin()
-                            } else {
-                                Toast.makeText(
-                                    context,
-                                    "Error en el registro",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-
-                        override fun onFailure(call: Call<Map<String, Any>>, t: Throwable) {
-                            isLoading = false
-                            Toast.makeText(
-                                context,
-                                "Error de red",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    })
+                    Toast.makeText(this@MainActivity, "Error en $action de $scriptName", Toast.LENGTH_SHORT).show()
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isLoading
-        ) {
-            if (isLoading) {
-                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
-            } else {
-                Text("Registrar")
+            }
+
+            override fun onFailure(call: Call<Map<String, String>>, t: Throwable) {
+                Toast.makeText(this@MainActivity, "Error de red: ${t.message}", Toast.LENGTH_SHORT).show()
+            }
+        })
+    }
+
+    private fun getScriptStatus(scriptName: String, callback: (String) -> Unit) {
+        RetrofitClient.apiService.getScriptStatus(scriptName).enqueue(object : Callback<ScriptStatus> {
+            override fun onResponse(call: Call<ScriptStatus>, response: Response<ScriptStatus>) {
+                if (response.isSuccessful) {
+                    val scriptStatus = response.body()
+                    val status = scriptStatus?.status ?: "stopped"
+                    callback(status)
+                } else {
+                    Toast.makeText(this@MainActivity, "Error al obtener estado de $scriptName", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            override fun onFailure(call: Call<ScriptStatus>, t: Throwable) {
+                Toast.makeText(this@MainActivity, "Error de red: ${t.message}", Toast.LENGTH_SHORT).show()
+            }
+        })
+    }
+
+    private fun showLogsActivity(title: String, scriptName: String, logs: String) {
+        val intent = Intent(this, LogsActivity::class.java)
+        intent.putExtra("logs", logs)
+        intent.putExtra("scriptName", scriptName)
+        startActivity(intent)
+    }
+
+    private fun setupSocketListeners() {
+        socket.on("scripts_update", onScripts)
+        socket.on("log_stdout", onLogStdout)
+        socket.on("log_stderr", onLogStderr)
+    }
+
+    private val onScripts = Emitter.Listener { args ->
+        val jsonArray = args[0] as? JSONArray
+        jsonArray?.let {
+            val scriptNames = mutableListOf<String>()
+            for (i in 0 until jsonArray.length()) {
+                scriptNames.add(jsonArray.getString(i))
+            }
+
+            val scripts = scriptNames.map { name -> Script(name) }
+            runOnUiThread {
+                displayScripts(scripts)
             }
         }
+    }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        TextButton(onClick = onSwitchToLogin) {
-            Text("¿Ya tienes cuenta? Inicia sesión aquí")
+    private val onLogStdout = Emitter.Listener { args ->
+        val data = args[0] as? JSONObject
+        data?.let {
+            val scriptName = it.getString("scriptName")
+            val log = it.getString("log")
+            runOnUiThread {
+                scriptLogs.getOrPut(scriptName) { mutableListOf() }.add("STDOUT: $log")
+            }
         }
+    }
+
+    private val onLogStderr = Emitter.Listener { args ->
+        val data = args[0] as? JSONObject
+        data?.let {
+            val scriptName = it.getString("scriptName")
+            val log = it.getString("errorLog")
+            runOnUiThread {
+                scriptLogs.getOrPut(scriptName) { mutableListOf() }.add("STDERR: $log")
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        socket.disconnect()
     }
 }

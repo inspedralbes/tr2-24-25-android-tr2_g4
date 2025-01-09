@@ -1,4 +1,8 @@
 package com.example.myapplication.network
 
-class ScriptStatus {
-}
+data class ScriptStatus(
+    val scriptName: String,
+    val status: String,
+    val stdoutLogs: List<String>,
+    val stderrLogs: List<String>
+)

@@ -1,4 +1,5 @@
 package com.example.myapplication.network
 
-class Script {
-}
+data class Script(
+    val name: String
+)
