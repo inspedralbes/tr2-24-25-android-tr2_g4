@@ -1,4 +1,7 @@
 package com.example.myapplication.network
 
-class PartidaResponse {
-}
+data class PartidaResponse(
+    val message: String,
+    val gameCode: String,
+    val estado: String? = null
+)

@@ -1,26 +1,30 @@
 package com.example.myapplication.network
 
-import android.util.Log
+import android.widget.Toast
+import androidx.test.core.app.ApplicationProvider
 import io.socket.client.IO
 import io.socket.client.Socket
-import java.net.URISyntaxException
+import java.net.URI
 
 object SocketManager {
-    private const val SOCKET_URL = "http://10.0.2.2:3000/"
-    private lateinit var socket: Socket
 
-    init {
+    private var socket: Socket? = null
+
+    fun conectar() {
         try {
-            val options = IO.Options().apply {
-                reconnection = true //
+            socket = IO.socket("http://10.0.2.2:3000")
+            socket?.connect()
+
+            socket?.on("estado_actualizado") { args ->
             }
-            socket = IO.socket(SOCKET_URL, options)
-        } catch (e: URISyntaxException) {
-            Log.e("SocketManager", "Error al conectar Socket.IO: ${e.message}")
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(ApplicationProvider.getApplicationContext(), "Error al conectar con el servidor", Toast.LENGTH_LONG).show()
         }
     }
 
-    fun getSocket(): Socket {
-        return socket
+
+    fun desconectar() {
+        socket?.disconnect()
     }
 }

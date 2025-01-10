@@ -1,3 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <item name="recyclerView" type="id" />
+    <item name="btnActualizarEstado" type="id" />
+    <item name="editCodigoPartida" type="id" />
+    <item name="editEstado" type="id" />
 </resources>

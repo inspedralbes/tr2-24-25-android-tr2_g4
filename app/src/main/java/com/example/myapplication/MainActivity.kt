@@ -1,214 +1,207 @@
 package com.example.myapplication
 
-import android.content.Intent
 import android.os.Bundle
-import android.util.Log
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import com.example.myapplication.network.RetrofitClient
-import com.example.myapplication.network.Script
-import com.example.myapplication.network.ScriptStatus
-import com.example.myapplication.network.SocketManager
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.unit.dp
+import com.example.myapplication.network.ApiClient
+import com.example.myapplication.network.Estado
+import com.example.myapplication.network.EstadoRequest
+import com.example.myapplication.network.Partida
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
-import io.socket.emitter.Emitter
-import org.json.JSONArray
-import org.json.JSONObject
-
 
 class MainActivity : ComponentActivity() {
-    private val socket = SocketManager.getSocket()
-    private val scriptLogs = mutableMapOf<String, MutableList<String>>()
+
+    private var partidas by mutableStateOf<List<Partida>>(listOf())
+    private var codigo by mutableStateOf("")
+    private var estado by mutableStateOf("")
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        fetchScripts()
-        setupSocketListeners()
-        socket.connect()
+        setContent {
+            MainScreen()
+        }
+
+        // Obtener partidas desde la API cuando se crea la actividad
+        obtenerPartidas()
     }
-    private fun fetchScripts() {
-        RetrofitClient.apiService.getScripts().enqueue(object : Callback<List<String>> {
-            override fun onResponse(call: Call<List<String>>, response: Response<List<String>>) {
+
+    private fun obtenerPartidas() {
+        val apiService = ApiClient.apiService
+        val call = apiService.obtenerPartidas()
+
+        call.enqueue(object : Callback<List<Partida>> {
+            override fun onResponse(call: Call<List<Partida>>, response: Response<List<Partida>>) {
                 if (response.isSuccessful) {
-                    val scriptNames = response.body()
-                    scriptNames?.let {
-                        val scripts = it.map { name -> Script(name) }
-                        displayScripts(scripts)
+                    val partidas = response.body()
+                    partidas?.let {
+                        // Para cada partida, obtener el estado
+                        obtenerEstadoDePartidas(it)
                     }
                 } else {
-                    Log.e("Error", "Error al obtener los scripts")
+                    Toast.makeText(this@MainActivity, "Error al obtener las partidas: ${response.message()}", Toast.LENGTH_SHORT).show()
                 }
             }
 
-            override fun onFailure(call: Call<List<String>>, t: Throwable) {
-                Log.e("Error", "Fallo en la llamada: ${t.message}")
+            override fun onFailure(call: Call<List<Partida>>, t: Throwable) {
+                Toast.makeText(this@MainActivity, "Error de conexión: ${t.message}", Toast.LENGTH_SHORT).show()
             }
         })
     }
 
-    private fun displayScripts(scripts: List<Script>) {
-        val scriptsContainer = findViewById<LinearLayout>(R.id.scriptsContainer)
-        scriptsContainer.removeAllViews()
+    // Obtener estado para cada partida
+    private fun obtenerEstadoDePartidas(partidas: List<Partida>) {
+        val apiService = ApiClient.apiService
+        val partidasConEstado = mutableListOf<Partida>()
+        val callCount = partidas.size
+        var completedCalls = 0
 
-        for (script in scripts) {
-            val scriptLayout = LinearLayout(this).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(0, 16, 0, 16)
-            }
+        for (partida in partidas) {
+            val call = apiService.obtenerEstadoPartida(partida.codigo)
 
-            val scriptNameTextView = TextView(this).apply {
-                text = script.name
-                layoutParams = LinearLayout.LayoutParams(
-                    0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    1f
-                )
-            }
+            call.enqueue(object : Callback<Estado> {
+                override fun onResponse(call: Call<Estado>, response: Response<Estado>) {
+                    if (response.isSuccessful) {
+                        val estado = response.body()
+                        estado?.let {
+                            // Actualizar el estado de la partida
+                            partidasConEstado.add(partida.copy(estado = it.estado))
+                        }
+                    } else {
+                        Toast.makeText(this@MainActivity, "Error al obtener el estado de la partida", Toast.LENGTH_SHORT).show()
+                    }
+                    completedCalls++
 
-            val startStopButton = android.widget.Button(this).apply {
-                text = "Iniciar"
-                setOnClickListener {
-                    val action = if (text == "Iniciar") "start" else "stop"
-                    controlScript(script.name, action)
-                    text = if (action == "start") "Detener" else "Iniciar"
+                    // Cuando todas las respuestas se hayan completado, actualizamos el estado
+                    if (completedCalls == callCount) {
+                        this@MainActivity.partidas = partidasConEstado
+                    }
                 }
-            }
 
-            val logsStdoutButton = android.widget.Button(this).apply {
-                text = "Logs Salida"
-                setOnClickListener {
-                    val logs = scriptLogs[script.name]?.filter { it.startsWith("STDOUT") }
-                        ?.joinToString("\n") ?: "Sin logs de salida"
-                    showLogsActivity("Logs de salida - ${script.name}", script.name, logs)
+                override fun onFailure(call: Call<Estado>, t: Throwable) {
+                    Toast.makeText(this@MainActivity, "Error de conexión: ${t.message}", Toast.LENGTH_SHORT).show()
+                    completedCalls++
+
+                    // Cuando todas las respuestas se hayan completado, actualizamos el estado
+                    if (completedCalls == callCount) {
+                        this@MainActivity.partidas = partidasConEstado
+                    }
                 }
-            }
-
-            val logsStderrButton = android.widget.Button(this).apply {
-                text = "Logs Error"
-                setOnClickListener {
-                    val logs = scriptLogs[script.name]?.filter { it.startsWith("STDERR") }
-                        ?.joinToString("\n") ?: "Sin logs de error"
-                    showErrorLogsActivity("Logs de error - ${script.name}", script.name, logs)
-                }
-            }
-
-            getScriptStatus(script.name) { status ->
-                startStopButton.text = if (status == "running") "Detener" else "Iniciar"
-            }
-
-            scriptLayout.addView(scriptNameTextView)
-            scriptLayout.addView(startStopButton)
-            scriptLayout.addView(logsStdoutButton)
-            scriptLayout.addView(logsStderrButton)
-
-            scriptsContainer.addView(scriptLayout)
+            })
         }
     }
 
-    private fun showErrorLogsActivity(title: String, scriptName: String, logs: String) {
-        val intent = Intent(this, ErrorLogsActivity::class.java)
-        intent.putExtra("logs", logs)
-        intent.putExtra("scriptName", scriptName)
-        startActivity(intent)
-    }
+    private fun actualizarEstadoPartida(codigo: String, estado: String) {
+        val estadoRequest = EstadoRequest(codigo, estado)
+        val apiService = ApiClient.apiService
+        val call = apiService.actualizarEstadoPartida(estadoRequest)
 
-    private fun controlScript(scriptName: String, action: String) {
-        RetrofitClient.apiService.controlScript(scriptName, action).enqueue(object : Callback<Map<String, String>> {
-            override fun onResponse(call: Call<Map<String, String>>, response: Response<Map<String, String>>) {
+        call.enqueue(object : Callback<Void> {
+            override fun onResponse(call: Call<Void>, response: Response<Void>) {
                 if (response.isSuccessful) {
-                    val message = response.body()?.get("message") ?: "Acción realizada"
-                    Toast.makeText(this@MainActivity, "$message en $scriptName", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "Estado actualizado", Toast.LENGTH_SHORT).show()
+                    // Aquí actualizamos el estado de la partida localmente en la lista
+                    actualizarPartidaEnLista(codigo, estado)
                 } else {
-                    Toast.makeText(this@MainActivity, "Error en $action de $scriptName", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "Error al actualizar el estado", Toast.LENGTH_SHORT).show()
                 }
             }
 
-            override fun onFailure(call: Call<Map<String, String>>, t: Throwable) {
-                Toast.makeText(this@MainActivity, "Error de red: ${t.message}", Toast.LENGTH_SHORT).show()
+            override fun onFailure(call: Call<Void>, t: Throwable) {
+                Toast.makeText(this@MainActivity, "Error de conexión", Toast.LENGTH_SHORT).show()
             }
         })
     }
 
-    private fun getScriptStatus(scriptName: String, callback: (String) -> Unit) {
-        RetrofitClient.apiService.getScriptStatus(scriptName).enqueue(object : Callback<ScriptStatus> {
-            override fun onResponse(call: Call<ScriptStatus>, response: Response<ScriptStatus>) {
-                if (response.isSuccessful) {
-                    val scriptStatus = response.body()
-                    val status = scriptStatus?.status ?: "stopped"
-                    callback(status)
-                } else {
-                    Toast.makeText(this@MainActivity, "Error al obtener estado de $scriptName", Toast.LENGTH_SHORT).show()
+    private fun actualizarPartidaEnLista(codigo: String, nuevoEstado: String) {
+        partidas = partidas.map { partida ->
+            if (partida.codigo == codigo) {
+                partida.copy(estado = nuevoEstado)
+            } else {
+                partida
+            }
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun MainScreen() {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Mostrar las partidas
+            PartidaList(partidas = partidas)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Campo para el código de la partida
+            TextField(
+                value = codigo,
+                onValueChange = { codigo = it },
+                label = { Text("Código de la partida") }
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Campo para el estado de la partida
+            TextField(
+                value = estado,
+                onValueChange = { estado = it },
+                label = { Text("Estado de la partida") }
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Botón para actualizar el estado
+            Button(
+                onClick = {
+                    if (codigo.isNotEmpty() && estado.isNotEmpty()) {
+                        actualizarEstadoPartida(codigo, estado)
+                    } else {
+                        Toast.makeText(this@MainActivity, "Por favor ingresa un código y estado", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            ) {
+                Text("Actualizar Estado")
+            }
+        }
+    }
+
+    @Composable
+    fun PartidaList(partidas: List<Partida>) {
+        if (partidas.isEmpty()) {
+            Text(text = "Cargando partidas...")
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(partidas) { partida ->
+                    PartidaItem(partida = partida)
                 }
             }
-
-            override fun onFailure(call: Call<ScriptStatus>, t: Throwable) {
-                Toast.makeText(this@MainActivity, "Error de red: ${t.message}", Toast.LENGTH_SHORT).show()
-            }
-        })
-    }
-
-    private fun showLogsActivity(title: String, scriptName: String, logs: String) {
-        val intent = Intent(this, LogsActivity::class.java)
-        intent.putExtra("logs", logs)
-        intent.putExtra("scriptName", scriptName)
-        startActivity(intent)
-    }
-
-    private fun setupSocketListeners() {
-        socket.on("scripts_update", onScripts)
-        socket.on("log_stdout", onLogStdout)
-        socket.on("log_stderr", onLogStderr)
-    }
-
-    private val onScripts = Emitter.Listener { args ->
-        val jsonArray = args[0] as? JSONArray
-        jsonArray?.let {
-            val scriptNames = mutableListOf<String>()
-            for (i in 0 until jsonArray.length()) {
-                scriptNames.add(jsonArray.getString(i))
-            }
-
-            val scripts = scriptNames.map { name -> Script(name) }
-            runOnUiThread {
-                displayScripts(scripts)
-            }
         }
     }
 
-    private val onLogStdout = Emitter.Listener { args ->
-        val data = args[0] as? JSONObject
-        data?.let {
-            val scriptName = it.getString("scriptName")
-            val log = it.getString("log")
-            runOnUiThread {
-                scriptLogs.getOrPut(scriptName) { mutableListOf() }.add("STDOUT: $log")
-            }
+    @Composable
+    fun PartidaItem(partida: Partida) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp)
+        ) {
+            Text("Código: ${partida.codigo}")
+            Text("Estado: ${partida.estado}")
         }
-    }
-
-    private val onLogStderr = Emitter.Listener { args ->
-        val data = args[0] as? JSONObject
-        data?.let {
-            val scriptName = it.getString("scriptName")
-            val log = it.getString("errorLog")
-            runOnUiThread {
-                scriptLogs.getOrPut(scriptName) { mutableListOf() }.add("STDERR: $log")
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        socket.disconnect()
     }
 }
