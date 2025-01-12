@@ -21,29 +21,54 @@ import com.example.myapplication.network.ApiClient
 import com.example.myapplication.network.Estado
 import com.example.myapplication.network.EstadoRequest
 import com.example.myapplication.network.Partida
+import com.example.myapplication.network.SocketManager
+import com.google.gson.Gson
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
 
 class MainActivity : ComponentActivity() {
 
+    private val socketManager = SocketManager
+    private var partidas by mutableStateOf<List<Partida>>(emptyList()) // Este es el estado reactivo
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MainScreen()
         }
+
+        // Conectar al socket y registrar el evento de estado actualizado
+        socketManager.conectar()
+        socketManager.registrarEventoEstadoActualizado { data ->
+            runOnUiThread {
+                actualizarPartidaDesdeSocket(data)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Desconectar el socket al destruir la actividad
+        socketManager.desconectar()
     }
 
     @Composable
     fun MainScreen() {
-        var partidas by remember { mutableStateOf<List<Partida>>(emptyList()) }
-
-        // Fetch partidas when the composable is first loaded
+        // Fetch inicial de partidas
         fetchPartidas { fetchedPartidas ->
             partidas = fetchedPartidas
         }
 
+        // Renderizar la lista de partidas
         PartidaList(partidas = partidas)
+    }
+
+    private fun actualizarPartidaDesdeSocket(data: String) {
+        val updatedPartida = parsePartida(data)
+        partidas = partidas.map { partida ->
+            if (partida.codigo == updatedPartida.codigo) updatedPartida else partida
+        }
     }
 
     private fun fetchPartidas(onResult: (List<Partida>) -> Unit) {
@@ -68,28 +93,94 @@ class MainActivity : ComponentActivity() {
 
     private fun fetchEstadosForPartidas(partidas: List<Partida>, onResult: (List<Partida>) -> Unit) {
         val apiService = ApiClient.apiService
-        val updatedPartidas = mutableListOf<Partida>()
+        val estadosMap = mutableMapOf<String, String>()
 
         partidas.forEach { partida ->
             val call = apiService.obtenerEstadoPartida(partida.codigo)
             call.enqueue(object : Callback<Estado> {
                 override fun onResponse(call: Call<Estado>, response: Response<Estado>) {
                     if (response.isSuccessful) {
-                        val estado = response.body()?.estado ?: "Desconocido"
-                        updatedPartidas.add(partida.copy(estado = estado))
-
-                        if (updatedPartidas.size == partidas.size) {
-                            onResult(updatedPartidas)
-                        }
+                        estadosMap[partida.codigo] = response.body()?.estado ?: "Desconocido"
                     } else {
-                        showToast("Error al obtener el estado para el código ${partida.codigo}")
+                        estadosMap[partida.codigo] = "Error"
+                    }
+
+                    if (estadosMap.size == partidas.size) {
+                        val updatedPartidas = partidas.map { it.copy(estado = estadosMap[it.codigo]) }
+                        onResult(updatedPartidas)
                     }
                 }
 
                 override fun onFailure(call: Call<Estado>, t: Throwable) {
-                    showToast("Error de conexión al obtener estado: ${t.message}")
+                    estadosMap[partida.codigo] = "Error"
+                    if (estadosMap.size == partidas.size) {
+                        val updatedPartidas = partidas.map { it.copy(estado = estadosMap[it.codigo]) }
+                        onResult(updatedPartidas)
+                    }
                 }
             })
+        }
+    }
+
+
+    private fun showToast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    @Composable
+    fun PartidaList(partidas: List<Partida>) {
+        val displayedPartidas by remember(partidas) { mutableStateOf(partidas) }
+
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            items(displayedPartidas, key = { it.codigo }) { partida ->
+                PartidaItem(partida = partida)
+            }
+        }
+    }
+
+
+    @Composable
+    fun PartidaItem(partida: Partida) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp)
+        ) {
+            Text(text = "Código: ${partida.codigo}", style = MaterialTheme.typography.bodyMedium)
+            Text(text = "Estado: ${partida.estado ?: "Desconocido"}", style = MaterialTheme.typography.bodySmall)
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Button(onClick = {
+                    postEstadoPartida(EstadoRequest(partida.codigo, "En Partida"))
+                    // Actualiza el estado de la partida localmente
+                    actualizarEstadoLocal(partida.codigo, "En Partida")
+                }) {
+                    Text("En Partida")
+                }
+                Button(onClick = {
+                    postEstadoPartida(EstadoRequest(partida.codigo, "Pausa"))
+                    // Actualiza el estado de la partida localmente
+                    actualizarEstadoLocal(partida.codigo, "Pausa")
+                }) {
+                    Text("Pausa")
+                }
+                Button(onClick = {
+                    postEstadoPartida(EstadoRequest(partida.codigo, "Terminada"))
+                    // Actualiza el estado de la partida localmente
+                    actualizarEstadoLocal(partida.codigo, "Terminada")
+                }) {
+                    Text("Terminada")
+                }
+            }
+        }
+    }
+
+    private fun actualizarEstadoLocal(codigo: String, nuevoEstado: String) {
+        val index = partidas.indexOfFirst { it.codigo == codigo }
+        if (index != -1) {
+            val updatedPartidas = partidas.toMutableList()
+            updatedPartidas[index] = updatedPartidas[index].copy(estado = nuevoEstado)
+            partidas = updatedPartidas
         }
     }
 
@@ -112,54 +203,7 @@ class MainActivity : ComponentActivity() {
         })
     }
 
-    private fun showToast(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-    }
-
-    @Composable
-    fun PartidaList(partidas: List<Partida>) {
-        if (partidas.isEmpty()) {
-            Text(
-                text = "Cargando partidas...",
-                modifier = Modifier.fillMaxSize().padding(16.dp),
-                style = MaterialTheme.typography.bodyLarge
-            )
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                items(partidas) { partida ->
-                    PartidaItem(partida = partida)
-                }
-            }
-        }
-    }
-
-    @Composable
-    fun PartidaItem(partida: Partida) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp)
-        ) {
-            Text(text = "Código: ${partida.codigo}", style = MaterialTheme.typography.bodyMedium)
-            Text(text = "Estado: ${partida.estado ?: "Desconocido"}", style = MaterialTheme.typography.bodySmall)
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                Button(onClick = {
-                    postEstadoPartida(EstadoRequest(partida.codigo, "En Partida"))
-                }) {
-                    Text("En Partida")
-                }
-                Button(onClick = {
-                    postEstadoPartida(EstadoRequest(partida.codigo, "Pausa"))
-                }) {
-                    Text("Pausa")
-                }
-                Button(onClick = {
-                    postEstadoPartida(EstadoRequest(partida.codigo, "Terminada"))
-                }) {
-                    Text("Terminada")
-                }
-            }
-        }
+    private fun parsePartida(data: String): Partida {
+        return Gson().fromJson(data, Partida::class.java)
     }
 }
