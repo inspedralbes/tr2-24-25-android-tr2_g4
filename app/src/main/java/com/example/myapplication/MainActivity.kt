@@ -6,11 +6,16 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.network.ApiClient
 import com.example.myapplication.network.Estado
@@ -22,170 +27,105 @@ import retrofit2.Response
 
 class MainActivity : ComponentActivity() {
 
-    private var partidas by mutableStateOf<List<Partida>>(listOf())
-    private var codigo by mutableStateOf("")
-    private var estado by mutableStateOf("")
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MainScreen()
         }
-
-        // Obtener partidas desde la API cuando se crea la actividad
-        obtenerPartidas()
     }
 
-    private fun obtenerPartidas() {
+    @Composable
+    fun MainScreen() {
+        var partidas by remember { mutableStateOf<List<Partida>>(emptyList()) }
+
+        // Fetch partidas when the composable is first loaded
+        fetchPartidas { fetchedPartidas ->
+            partidas = fetchedPartidas
+        }
+
+        PartidaList(partidas = partidas)
+    }
+
+    private fun fetchPartidas(onResult: (List<Partida>) -> Unit) {
         val apiService = ApiClient.apiService
         val call = apiService.obtenerPartidas()
 
         call.enqueue(object : Callback<List<Partida>> {
             override fun onResponse(call: Call<List<Partida>>, response: Response<List<Partida>>) {
                 if (response.isSuccessful) {
-                    val partidas = response.body()
-                    partidas?.let {
-                        // Para cada partida, obtener el estado
-                        obtenerEstadoDePartidas(it)
-                    }
+                    val partidas = response.body() ?: emptyList()
+                    fetchEstadosForPartidas(partidas, onResult)
                 } else {
-                    Toast.makeText(this@MainActivity, "Error al obtener las partidas: ${response.message()}", Toast.LENGTH_SHORT).show()
+                    showToast("Error al obtener las partidas: ${response.message()}")
                 }
             }
 
             override fun onFailure(call: Call<List<Partida>>, t: Throwable) {
-                Toast.makeText(this@MainActivity, "Error de conexión: ${t.message}", Toast.LENGTH_SHORT).show()
+                showToast("Error de conexión: ${t.message}")
             }
         })
     }
 
-    // Obtener estado para cada partida
-    private fun obtenerEstadoDePartidas(partidas: List<Partida>) {
+    private fun fetchEstadosForPartidas(partidas: List<Partida>, onResult: (List<Partida>) -> Unit) {
         val apiService = ApiClient.apiService
-        val partidasConEstado = mutableListOf<Partida>()
-        val callCount = partidas.size
-        var completedCalls = 0
+        val updatedPartidas = mutableListOf<Partida>()
 
-        for (partida in partidas) {
+        partidas.forEach { partida ->
             val call = apiService.obtenerEstadoPartida(partida.codigo)
-
             call.enqueue(object : Callback<Estado> {
                 override fun onResponse(call: Call<Estado>, response: Response<Estado>) {
                     if (response.isSuccessful) {
-                        val estado = response.body()
-                        estado?.let {
-                            // Actualizar el estado de la partida
-                            partidasConEstado.add(partida.copy(estado = it.estado))
+                        val estado = response.body()?.estado ?: "Desconocido"
+                        updatedPartidas.add(partida.copy(estado = estado))
+
+                        if (updatedPartidas.size == partidas.size) {
+                            onResult(updatedPartidas)
                         }
                     } else {
-                        Toast.makeText(this@MainActivity, "Error al obtener el estado de la partida", Toast.LENGTH_SHORT).show()
-                    }
-                    completedCalls++
-
-                    // Cuando todas las respuestas se hayan completado, actualizamos el estado
-                    if (completedCalls == callCount) {
-                        this@MainActivity.partidas = partidasConEstado
+                        showToast("Error al obtener el estado para el código ${partida.codigo}")
                     }
                 }
 
                 override fun onFailure(call: Call<Estado>, t: Throwable) {
-                    Toast.makeText(this@MainActivity, "Error de conexión: ${t.message}", Toast.LENGTH_SHORT).show()
-                    completedCalls++
-
-                    // Cuando todas las respuestas se hayan completado, actualizamos el estado
-                    if (completedCalls == callCount) {
-                        this@MainActivity.partidas = partidasConEstado
-                    }
+                    showToast("Error de conexión al obtener estado: ${t.message}")
                 }
             })
         }
     }
 
-    private fun actualizarEstadoPartida(codigo: String, estado: String) {
-        val estadoRequest = EstadoRequest(codigo, estado)
+    private fun postEstadoPartida(estadoRequest: EstadoRequest) {
         val apiService = ApiClient.apiService
         val call = apiService.actualizarEstadoPartida(estadoRequest)
 
         call.enqueue(object : Callback<Void> {
             override fun onResponse(call: Call<Void>, response: Response<Void>) {
                 if (response.isSuccessful) {
-                    Toast.makeText(this@MainActivity, "Estado actualizado", Toast.LENGTH_SHORT).show()
-                    // Aquí actualizamos el estado de la partida localmente en la lista
-                    actualizarPartidaEnLista(codigo, estado)
+                    showToast("Estado actualizado correctamente")
                 } else {
-                    Toast.makeText(this@MainActivity, "Error al actualizar el estado", Toast.LENGTH_SHORT).show()
+                    showToast("Error al actualizar el estado: ${response.message()}")
                 }
             }
 
             override fun onFailure(call: Call<Void>, t: Throwable) {
-                Toast.makeText(this@MainActivity, "Error de conexión", Toast.LENGTH_SHORT).show()
+                showToast("Error de conexión: ${t.message}")
             }
         })
     }
 
-    private fun actualizarPartidaEnLista(codigo: String, nuevoEstado: String) {
-        partidas = partidas.map { partida ->
-            if (partida.codigo == codigo) {
-                partida.copy(estado = nuevoEstado)
-            } else {
-                partida
-            }
-        }
-    }
-
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    fun MainScreen() {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Mostrar las partidas
-            PartidaList(partidas = partidas)
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Campo para el código de la partida
-            TextField(
-                value = codigo,
-                onValueChange = { codigo = it },
-                label = { Text("Código de la partida") }
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Campo para el estado de la partida
-            TextField(
-                value = estado,
-                onValueChange = { estado = it },
-                label = { Text("Estado de la partida") }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Botón para actualizar el estado
-            Button(
-                onClick = {
-                    if (codigo.isNotEmpty() && estado.isNotEmpty()) {
-                        actualizarEstadoPartida(codigo, estado)
-                    } else {
-                        Toast.makeText(this@MainActivity, "Por favor ingresa un código y estado", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            ) {
-                Text("Actualizar Estado")
-            }
-        }
+    private fun showToast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     @Composable
     fun PartidaList(partidas: List<Partida>) {
         if (partidas.isEmpty()) {
-            Text(text = "Cargando partidas...")
+            Text(
+                text = "Cargando partidas...",
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                style = MaterialTheme.typography.bodyLarge
+            )
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                 items(partidas) { partida ->
                     PartidaItem(partida = partida)
                 }
@@ -200,8 +140,26 @@ class MainActivity : ComponentActivity() {
                 .fillMaxWidth()
                 .padding(8.dp)
         ) {
-            Text("Código: ${partida.codigo}")
-            Text("Estado: ${partida.estado}")
+            Text(text = "Código: ${partida.codigo}", style = MaterialTheme.typography.bodyMedium)
+            Text(text = "Estado: ${partida.estado ?: "Desconocido"}", style = MaterialTheme.typography.bodySmall)
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Button(onClick = {
+                    postEstadoPartida(EstadoRequest(partida.codigo, "En Partida"))
+                }) {
+                    Text("En Partida")
+                }
+                Button(onClick = {
+                    postEstadoPartida(EstadoRequest(partida.codigo, "Pausa"))
+                }) {
+                    Text("Pausa")
+                }
+                Button(onClick = {
+                    postEstadoPartida(EstadoRequest(partida.codigo, "Terminada"))
+                }) {
+                    Text("Terminada")
+                }
+            }
         }
     }
 }
