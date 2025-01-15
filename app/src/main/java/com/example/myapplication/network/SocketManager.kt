@@ -9,7 +9,7 @@ object SocketManager {
 
     fun conectar() {
         try {
-            socket = IO.socket("http://10.0.2.2:3000")
+            socket = IO.socket("http://g-maths-tr2.dam.inspedralbes.cat:25672")
             socket?.connect()
         } catch (e: Exception) {
             e.printStackTrace()
